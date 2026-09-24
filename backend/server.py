@@ -43,7 +43,7 @@ EMAIL_BASE_URL = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip().rstrip(
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME") or "Sistem Keuangan"
 
-ROLES = ["admin", "keuangan", "approver", "user"]
+ROLES = ["superadmin", "admin", "keuangan", "approver", "user"]
 
 
 def hash_password(password: str) -> str:
@@ -106,6 +106,9 @@ async def get_current_user(request: Request) -> dict:
 
 def require_roles(*roles):
     async def checker(user: dict = Depends(get_current_user)) -> dict:
+        # Super admin selalu diizinkan mengakses semua endpoint
+        if user.get("role") == "superadmin":
+            return user
         if roles and user.get("role") not in roles:
             raise HTTPException(status_code=403, detail="Akses ditolak untuk peran Anda")
         return user
@@ -293,6 +296,9 @@ async def register(body: RegisterIn, response: Response, user: dict = Depends(re
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email sudah terdaftar")
     role = body.role if body.role in ROLES else "user"
+    # Hanya super admin yang boleh membuat akun super admin
+    if role == "superadmin" and user.get("role") != "superadmin":
+        raise HTTPException(status_code=403, detail="Hanya super admin yang dapat membuat akun super admin")
     doc = {"email": email, "password_hash": hash_password(body.password), "name": body.name,
            "role": role, "token_version": 0, "created_at": now_iso()}
     res = await db.users.insert_one(doc)
@@ -395,6 +401,16 @@ async def list_users(user: dict = Depends(require_roles("admin"))):
 
 @api_router.put("/users/{uid}")
 async def update_user(uid: str, body: UserUpdateIn, user: dict = Depends(require_roles("admin"))):
+    target = await db.users.find_one({"_id": ObjectId(uid)})
+    if not target:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan")
+    is_super = user.get("role") == "superadmin"
+    # Hanya super admin yang boleh mengubah akun super admin
+    if target.get("role") == "superadmin" and not is_super:
+        raise HTTPException(status_code=403, detail="Hanya super admin yang dapat mengubah akun super admin")
+    # Hanya super admin yang boleh menaikkan peran menjadi super admin
+    if body.role == "superadmin" and not is_super:
+        raise HTTPException(status_code=403, detail="Hanya super admin yang dapat menetapkan peran super admin")
     upd = {}
     if body.name is not None:
         upd["name"] = body.name
@@ -412,6 +428,17 @@ async def update_user(uid: str, body: UserUpdateIn, user: dict = Depends(require
 async def delete_user(uid: str, user: dict = Depends(require_roles("admin"))):
     if str(user["_id"] if "_id" in user else user.get("id")) == uid:
         raise HTTPException(status_code=400, detail="Tidak dapat menghapus akun sendiri")
+    target = await db.users.find_one({"_id": ObjectId(uid)})
+    if not target:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan")
+    is_super = user.get("role") == "superadmin"
+    if target.get("role") == "superadmin":
+        if not is_super:
+            raise HTTPException(status_code=403, detail="Hanya super admin yang dapat menghapus akun super admin")
+        # Cegah penghapusan super admin terakhir
+        remaining = await db.users.count_documents({"role": "superadmin"})
+        if remaining <= 1:
+            raise HTTPException(status_code=400, detail="Tidak dapat menghapus super admin terakhir")
     await db.users.delete_one({"_id": ObjectId(uid)})
     return {"message": "User dihapus"}
 
@@ -954,18 +981,25 @@ async def seed():
     await db.login_attempts.create_index("identifier")
     await db.password_reset_requests.create_index("email")
     await db.password_reset_requests.create_index("created_at", expireAfterSeconds=900)
-    # admin
+    # super admin (pemilik aplikasi)
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com").lower()
     admin_pw = os.environ.get("ADMIN_PASSWORD", "admin123")
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
         await db.users.insert_one({"email": admin_email, "password_hash": hash_password(admin_pw),
-                                   "name": "Administrator", "role": "admin", "token_version": 0,
+                                   "name": "Super Admin", "role": "superadmin", "token_version": 0,
                                    "created_at": now_iso()})
-    elif not verify_password(admin_pw, existing["password_hash"]):
-        await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_pw)}})
+    else:
+        upd = {}
+        if not verify_password(admin_pw, existing["password_hash"]):
+            upd["password_hash"] = hash_password(admin_pw)
+        if existing.get("role") != "superadmin":
+            upd["role"] = "superadmin"
+        if upd:
+            await db.users.update_one({"email": admin_email}, {"$set": upd})
     # demo users per peran yang direncanakan (idempoten)
     demo_users = [
+        {"email": "admin@sbb.co.id", "password": "admin123", "name": "Administrator", "role": "admin"},
         {"email": "keuangan@sbb.co.id", "password": "keuangan123", "name": "Staff Keuangan", "role": "keuangan"},
         {"email": "approver@sbb.co.id", "password": "approver123", "name": "Approver Otorisasi", "role": "approver"},
         {"email": "pemohon@sbb.co.id", "password": "pemohon123", "name": "Pemohon", "role": "user"},

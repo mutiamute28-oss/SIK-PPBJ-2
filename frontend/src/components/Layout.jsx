@@ -21,12 +21,20 @@ const NAV = [
   { to: "/pengguna", label: "Pengguna", icon: Users, roles: ["admin"] },
 ];
 
+const ROLE_LABELS = {
+  superadmin: "Super Admin",
+  admin: "Admin",
+  keuangan: "Keuangan",
+  approver: "Approver",
+  user: "User (Pemohon)",
+};
+
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
   const role = user?.role || "user";
-  const items = NAV.filter((n) => n.roles.includes(role));
+  const items = NAV.filter((n) => role === "superadmin" || n.roles.includes(role));
 
   const SideContent = () => (
     <>
@@ -59,7 +67,7 @@ export default function Layout({ children }) {
       <div className="p-3 border-t border-white/10">
         <div className="px-3 py-2 mb-2">
           <div className="text-white text-sm font-semibold truncate">{user?.name}</div>
-          <div className="text-teal-200/70 text-xs capitalize">{role}</div>
+          <div className="text-teal-200/70 text-xs">{ROLE_LABELS[role] || role}</div>
         </div>
         <button data-testid="logout-button" onClick={() => { logout(); nav("/login"); }}
           className="flex items-center gap-2 w-full px-3 py-2.5 rounded-lg text-sm text-red-200 hover:bg-red-500/20 transition-colors">

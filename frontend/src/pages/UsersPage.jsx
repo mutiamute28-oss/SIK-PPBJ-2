@@ -1,27 +1,56 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import api from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import Modal from "@/components/Modal";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 const INP = "w-full bg-white border border-slate-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#14758a]";
 const L = "block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5";
 const ROLES = [
+  { v: "superadmin", l: "Super Admin", superOnly: true },
   { v: "admin", l: "Admin" },
   { v: "keuangan", l: "Keuangan" },
   { v: "approver", l: "Approver (Otorisasi)" },
   { v: "user", l: "User (Pemohon)" },
 ];
-const ROLE_CLS = { admin: "bg-purple-50 text-purple-700", keuangan: "bg-teal-50 text-teal-700", approver: "bg-blue-50 text-blue-700", user: "bg-slate-100 text-slate-600" };
+const ROLE_LABEL = ROLES.reduce((a, r) => ({ ...a, [r.v]: r.l }), {});
+const ROLE_CLS = {
+  superadmin: "bg-amber-100 text-amber-800 ring-1 ring-amber-300",
+  admin: "bg-purple-50 text-purple-700",
+  keuangan: "bg-teal-50 text-teal-700",
+  approver: "bg-blue-50 text-blue-700",
+  user: "bg-slate-100 text-slate-600",
+};
 
 export default function UsersPage() {
+  const { user: me } = useAuth();
+  const isSuper = me?.role === "superadmin";
   const [users, setUsers] = useState([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [filter, setFilter] = useState("all");
   const [f, setF] = useState({ name: "", email: "", password: "", role: "user" });
 
   const load = useCallback(async () => { const { data } = await api.get("/users"); setUsers(data); }, []);
   useEffect(() => { load(); }, [load]);
+
+  // opsi peran: superadmin hanya dapat dipilih oleh super admin
+  const roleOptions = useMemo(() => ROLES.filter((r) => !r.superOnly || isSuper), [isSuper]);
+
+  const counts = useMemo(() => {
+    const c = { all: users.length };
+    for (const u of users) c[u.role] = (c[u.role] || 0) + 1;
+    return c;
+  }, [users]);
+
+  const filteredUsers = useMemo(
+    () => (filter === "all" ? users : users.filter((u) => u.role === filter)),
+    [users, filter]
+  );
+
+  // apakah 'me' boleh mengelola baris user tertentu
+  const canManage = (u) => (u.role === "superadmin" ? isSuper : true);
 
   const openNew = () => { setEditing(null); setF({ name: "", email: "", password: "", role: "user" }); setOpen(true); };
   const openEdit = (u) => { setEditing(u); setF({ name: u.name, email: u.email, password: "", role: u.role }); setOpen(true); };
@@ -51,25 +80,47 @@ export default function UsersPage() {
         <button data-testid="add-user" onClick={openNew} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md bg-[#14758a] hover:bg-[#106071] text-white text-sm font-semibold"><Plus className="w-4 h-4" /> Tambah Pengguna</button>
       </div>
 
+      <div className="flex flex-wrap gap-2" data-testid="role-filter">
+        {[{ v: "all", l: "Semua" }, ...ROLES].map((r) => {
+          const active = filter === r.v;
+          const n = counts[r.v] || 0;
+          return (
+            <button key={r.v} onClick={() => setFilter(r.v)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${active ? "bg-[#14758a] text-white border-[#14758a]" : "bg-white text-slate-600 border-slate-200 hover:border-[#14758a]"}`}>
+              {r.v === "superadmin" && <ShieldCheck className="w-3.5 h-3.5" />}
+              {r.l}<span className={`ml-0.5 ${active ? "text-teal-100" : "text-slate-400"}`}>{n}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="bg-white border border-slate-200 rounded-lg shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
             <tr><th className="text-left px-4 py-3 font-semibold">Nama</th><th className="text-left px-4 py-3 font-semibold">Email</th><th className="text-left px-4 py-3 font-semibold">Peran</th><th className="text-right px-4 py-3 font-semibold">Aksi</th></tr>
           </thead>
           <tbody>
-            {users.map((u) => (
+            {filteredUsers.map((u) => {
+              const manage = canManage(u);
+              return (
               <tr key={u.id} className="border-t border-slate-100 hover:bg-teal-50/40">
-                <td className="px-4 py-3 text-slate-800 font-medium">{u.name}</td>
+                <td className="px-4 py-3 text-slate-800 font-medium">
+                  {u.name}{u.id === me?.id && <span className="ml-2 text-[10px] font-semibold text-[#14758a]">(Anda)</span>}
+                </td>
                 <td className="px-4 py-3 text-slate-600">{u.email}</td>
-                <td className="px-4 py-3"><span className={`text-xs font-semibold px-2 py-0.5 rounded capitalize ${ROLE_CLS[u.role]}`}>{u.role}</span></td>
+                <td className="px-4 py-3"><span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded ${ROLE_CLS[u.role] || "bg-slate-100 text-slate-600"}`}>{u.role === "superadmin" && <ShieldCheck className="w-3 h-3" />}{ROLE_LABEL[u.role] || u.role}</span></td>
                 <td className="px-4 py-3">
                   <div className="flex justify-end gap-1">
-                    <button onClick={() => openEdit(u)} className="p-1.5 text-slate-500 hover:text-[#f2941f] hover:bg-slate-100 rounded"><Pencil className="w-4 h-4" /></button>
-                    <button onClick={() => del(u)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-slate-100 rounded"><Trash2 className="w-4 h-4" /></button>
+                    <button disabled={!manage} title={manage ? "Edit" : "Hanya super admin"} onClick={() => openEdit(u)} className="p-1.5 text-slate-500 hover:text-[#f2941f] hover:bg-slate-100 rounded disabled:opacity-30 disabled:cursor-not-allowed"><Pencil className="w-4 h-4" /></button>
+                    <button disabled={!manage || u.id === me?.id} title={u.id === me?.id ? "Tidak bisa hapus akun sendiri" : (manage ? "Hapus" : "Hanya super admin")} onClick={() => del(u)} className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-slate-100 rounded disabled:opacity-30 disabled:cursor-not-allowed"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
+            {filteredUsers.length === 0 && (
+              <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400 text-sm">Belum ada pengguna pada peran ini.</td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -79,7 +130,7 @@ export default function UsersPage() {
           <div><label className={L}>Nama</label><input data-testid="user-name" required className={INP} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
           <div><label className={L}>Email</label><input data-testid="user-email" type="email" required disabled={!!editing} className={INP} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
           <div><label className={L}>Kata Sandi {editing && <span className="text-slate-400 normal-case">(kosongkan jika tidak diubah)</span>}</label><input data-testid="user-password" type="password" className={INP} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
-          <div><label className={L}>Peran</label><select data-testid="user-role" className={INP} value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{ROLES.map((r) => <option key={r.v} value={r.v}>{r.l}</option>)}</select></div>
+          <div><label className={L}>Peran</label><select data-testid="user-role" className={INP} value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{roleOptions.map((r) => <option key={r.v} value={r.v}>{r.l}</option>)}</select></div>
           <div className="flex justify-end gap-3 pt-2"><button type="button" onClick={() => setOpen(false)} className="px-4 py-2 rounded-md border border-slate-300 text-sm">Batal</button><button type="submit" data-testid="save-user" className="px-5 py-2 rounded-md bg-[#14758a] text-white text-sm font-semibold">Simpan</button></div>
         </form>
       </Modal>
