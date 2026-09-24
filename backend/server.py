@@ -964,11 +964,17 @@ async def seed():
                                    "created_at": now_iso()})
     elif not verify_password(admin_pw, existing["password_hash"]):
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_pw)}})
-    # demo finance user
-    if not await db.users.find_one({"email": "keuangan@sbb.co.id"}):
-        await db.users.insert_one({"email": "keuangan@sbb.co.id", "password_hash": hash_password("keuangan123"),
-                                   "name": "Staff Keuangan", "role": "keuangan", "token_version": 0,
-                                   "created_at": now_iso()})
+    # demo users per peran yang direncanakan (idempoten)
+    demo_users = [
+        {"email": "keuangan@sbb.co.id", "password": "keuangan123", "name": "Staff Keuangan", "role": "keuangan"},
+        {"email": "approver@sbb.co.id", "password": "approver123", "name": "Approver Otorisasi", "role": "approver"},
+        {"email": "pemohon@sbb.co.id", "password": "pemohon123", "name": "Pemohon", "role": "user"},
+    ]
+    for du in demo_users:
+        if not await db.users.find_one({"email": du["email"]}):
+            await db.users.insert_one({"email": du["email"], "password_hash": hash_password(du["password"]),
+                                       "name": du["name"], "role": du["role"], "token_version": 0,
+                                       "created_at": now_iso()})
     # COA
     if await db.accounts.count_documents({}) == 0:
         for a in DEFAULT_COA:

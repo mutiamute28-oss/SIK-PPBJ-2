@@ -72,7 +72,7 @@ export function printDocument(doc) {
     .foot { margin-top:14px; font-size:9px; color:#999; text-align:right; }
   </style></head><body>
     <div class="kop">
-      <img src="/logo.png" />
+      <img src="/logo-icon.png" />
       <div><h1>PT. SUMBER BERDAYA BERSAMA</h1><p>Formulir Administrasi Keuangan · Sistem Pengajuan Barang & Jasa</p></div>
     </div>
     <div class="title"><h2>${esc(TITLES[doc.doc_type] || doc.doc_type)}</h2><div class="no">No: ${esc(doc.no)}</div></div>

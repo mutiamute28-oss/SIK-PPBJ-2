@@ -26,7 +26,7 @@ export default function ResetPassword() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#f8fafc] p-6">
       <div className="w-full max-w-md bg-white border border-slate-200 rounded-xl shadow-sm p-8">
-        <img src="/logo.png" alt="Logo" className="w-12 h-12 object-contain mb-4" />
+        <img src="/logo-icon.png" alt="Logo" className="w-14 h-14 object-contain mb-4" />
         <h2 className="font-heading text-xl font-bold text-slate-900 mb-1">Atur Ulang Kata Sandi</h2>
         <p className="text-slate-500 text-sm mb-6">Masukkan kata sandi baru Anda.</p>
         {error && <div className="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">{error}</div>}

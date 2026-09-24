@@ -29,7 +29,7 @@ export default function Login() {
         <div className="absolute -right-20 -top-20 w-96 h-96 rounded-full bg-[#14758a]/30 blur-3xl" />
         <div className="absolute right-10 bottom-10 w-72 h-72 rounded-full bg-[#f2941f]/10 blur-3xl" />
         <div className="flex items-center gap-3 relative z-10">
-          <img src="/logo.png" alt="Logo" className="w-14 h-14 object-contain" />
+          <img src="/logo-icon.png" alt="Logo" className="w-14 h-14 object-contain drop-shadow" />
           <div className="text-white font-heading font-extrabold text-xl">PERMINTAAN KEUANGAN</div>
         </div>
         <div className="relative z-10">
