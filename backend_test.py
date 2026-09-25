@@ -64,6 +64,10 @@ class TestSession:
     def delete(self, path: str, **kwargs):
         """DELETE request with session cookies"""
         return self.session.delete(f"{BASE_URL}{path}", timeout=30, **kwargs)
+    
+    def patch(self, path: str, **kwargs):
+        """PATCH request with session cookies"""
+        return self.session.patch(f"{BASE_URL}{path}", timeout=30, **kwargs)
 
 
 def log_test(name: str, passed: bool, details: str = ""):
@@ -388,6 +392,365 @@ def test_superadmin_management_powers():
     return True
 
 
+def test_audit_log_feature():
+    """Test 5: Audit Log - Create user, deactivate, activate, reset password, then check audit logs"""
+    print("\n=== TEST 5: Audit Log Feature (GET /api/audit-logs) ===")
+    
+    # Login as superadmin
+    superadmin_session = TestSession()
+    if not superadmin_session.login(CREDENTIALS["superadmin"]["email"], CREDENTIALS["superadmin"]["password"]):
+        log_test("Superadmin login for audit log test", False, "Could not login")
+        return False
+    
+    log_test("Superadmin login for audit log test", True, "Logged in as superadmin")
+    
+    # Create a temporary user to perform actions on
+    temp_user_email = "audit-test-user@test.com"
+    resp = superadmin_session.post("/auth/register", json={
+        "email": temp_user_email,
+        "password": "AuditTest123",
+        "name": "Audit Test User",
+        "role": "user"
+    })
+    
+    temp_user_id = None
+    if resp.status_code in [200, 201]:
+        temp_user = resp.json()
+        temp_user_id = temp_user.get("id")
+        log_test("Create temp user for audit log test", True, f"Created user ID: {temp_user_id}")
+    else:
+        log_test("Create temp user for audit log test", False, f"Status {resp.status_code}: {resp.text}")
+        return False
+    
+    # Perform actions to generate audit logs
+    # 1. Deactivate user
+    resp = superadmin_session.patch(f"/users/{temp_user_id}/active", json={"active": False})
+    if resp.status_code == 200:
+        log_test("Deactivate temp user (for audit log)", True, "User deactivated")
+    else:
+        log_test("Deactivate temp user (for audit log)", False, f"Status {resp.status_code}: {resp.text}")
+    
+    # 2. Activate user
+    resp = superadmin_session.patch(f"/users/{temp_user_id}/active", json={"active": True})
+    if resp.status_code == 200:
+        log_test("Activate temp user (for audit log)", True, "User activated")
+    else:
+        log_test("Activate temp user (for audit log)", False, f"Status {resp.status_code}: {resp.text}")
+    
+    # 3. Reset password
+    resp = superadmin_session.post(f"/users/{temp_user_id}/reset-password", json={"password": "NewPass123"})
+    if resp.status_code == 200:
+        log_test("Reset temp user password (for audit log)", True, "Password reset")
+    else:
+        log_test("Reset temp user password (for audit log)", False, f"Status {resp.status_code}: {resp.text}")
+    
+    # 4. Get audit logs as superadmin (should return 200)
+    resp = superadmin_session.get("/audit-logs")
+    if resp.status_code == 200:
+        logs = resp.json()
+        log_test("Superadmin GET /api/audit-logs", True, f"Retrieved {len(logs)} audit log entries")
+        
+        # Verify audit log entries contain expected actions
+        actions_found = [log.get("action") for log in logs]
+        expected_actions = ["user.create", "user.deactivate", "user.activate", "user.reset_password"]
+        
+        # Check if all expected actions are in the logs
+        all_actions_present = all(action in actions_found for action in expected_actions)
+        
+        if all_actions_present:
+            log_test("Audit log contains expected actions", True, 
+                    f"Found: user.create, user.deactivate, user.activate, user.reset_password")
+        else:
+            log_test("Audit log contains expected actions", False, 
+                    f"Missing some actions. Found: {set(actions_found) & set(expected_actions)}")
+        
+        # Verify audit log structure (check first entry)
+        if logs:
+            first_log = logs[0]
+            required_fields = ["action", "actor_email", "target_email", "details", "created_at"]
+            has_all_fields = all(field in first_log for field in required_fields)
+            
+            if has_all_fields:
+                log_test("Audit log entry structure", True, 
+                        f"Contains all required fields: {', '.join(required_fields)}")
+                
+                # Verify actor_email is superadmin
+                if first_log.get("actor_email") == CREDENTIALS["superadmin"]["email"]:
+                    log_test("Audit log actor_email correct", True, 
+                            f"Actor: {first_log.get('actor_email')}")
+                else:
+                    log_test("Audit log actor_email correct", False, 
+                            f"Expected {CREDENTIALS['superadmin']['email']}, got {first_log.get('actor_email')}")
+                
+                # Verify target_email is temp user
+                target_logs = [log for log in logs if log.get("target_email") == temp_user_email]
+                if target_logs:
+                    log_test("Audit log target_email correct", True, 
+                            f"Found {len(target_logs)} entries for target {temp_user_email}")
+                else:
+                    log_test("Audit log target_email correct", False, 
+                            f"No entries found for target {temp_user_email}")
+            else:
+                missing = [f for f in required_fields if f not in first_log]
+                log_test("Audit log entry structure", False, f"Missing fields: {missing}")
+        
+        # Verify logs are sorted newest first (check created_at timestamps)
+        if len(logs) >= 2:
+            first_time = logs[0].get("created_at", "")
+            second_time = logs[1].get("created_at", "")
+            if first_time >= second_time:
+                log_test("Audit logs sorted newest first", True, "Timestamps in descending order")
+            else:
+                log_test("Audit logs sorted newest first", False, 
+                        f"First: {first_time}, Second: {second_time}")
+    else:
+        log_test("Superadmin GET /api/audit-logs", False, f"Status {resp.status_code}: {resp.text}")
+    
+    # 5. Test admin access to audit logs (should return 200)
+    admin_session = TestSession()
+    if admin_session.login(CREDENTIALS["admin"]["email"], CREDENTIALS["admin"]["password"]):
+        resp = admin_session.get("/audit-logs")
+        if resp.status_code == 200:
+            log_test("Admin GET /api/audit-logs", True, "Admin can access audit logs (200)")
+        else:
+            log_test("Admin GET /api/audit-logs", False, 
+                    f"Expected 200, got {resp.status_code}: {resp.text}")
+    else:
+        log_test("Admin login for audit log test", False, "Could not login as admin")
+    
+    # 6. Test keuangan access to audit logs (should return 403)
+    keuangan_session = TestSession()
+    if keuangan_session.login(CREDENTIALS["keuangan"]["email"], CREDENTIALS["keuangan"]["password"]):
+        resp = keuangan_session.get("/audit-logs")
+        if resp.status_code == 403:
+            log_test("Keuangan GET /api/audit-logs (should be 403)", True, 
+                    "Correctly blocked with 403")
+        else:
+            log_test("Keuangan GET /api/audit-logs (should be 403)", False, 
+                    f"Expected 403, got {resp.status_code}: {resp.text}")
+    else:
+        log_test("Keuangan login for audit log test", False, "Could not login as keuangan")
+    
+    # Clean up: Delete temp user
+    if temp_user_id:
+        resp = superadmin_session.delete(f"/users/{temp_user_id}")
+        if resp.status_code == 200:
+            log_test("Clean up audit test user", True, "Deleted temp user")
+        else:
+            log_test("Clean up audit test user", False, 
+                    f"Could not delete: {resp.status_code}")
+    
+    return True
+
+
+def test_deactivate_activate_feature():
+    """Test 6: Deactivate/Activate user - PATCH /api/users/{id}/active and login blocking"""
+    print("\n=== TEST 6: Deactivate/Activate User Feature ===")
+    
+    # Login as superadmin
+    superadmin_session = TestSession()
+    if not superadmin_session.login(CREDENTIALS["superadmin"]["email"], CREDENTIALS["superadmin"]["password"]):
+        log_test("Superadmin login for deactivate test", False, "Could not login")
+        return False
+    
+    # Create a temporary user
+    temp_user_email = "deactivate-test-user@test.com"
+    temp_user_password = "DeactivateTest123"
+    resp = superadmin_session.post("/auth/register", json={
+        "email": temp_user_email,
+        "password": temp_user_password,
+        "name": "Deactivate Test User",
+        "role": "user"
+    })
+    
+    temp_user_id = None
+    if resp.status_code in [200, 201]:
+        temp_user = resp.json()
+        temp_user_id = temp_user.get("id")
+        log_test("Create temp user for deactivate test", True, f"Created user ID: {temp_user_id}")
+    else:
+        log_test("Create temp user for deactivate test", False, f"Status {resp.status_code}: {resp.text}")
+        return False
+    
+    # Test 1: Deactivate the temp user
+    resp = superadmin_session.patch(f"/users/{temp_user_id}/active", json={"active": False})
+    if resp.status_code == 200:
+        log_test("PATCH /api/users/{id}/active (deactivate)", True, "User deactivated successfully")
+    else:
+        log_test("PATCH /api/users/{id}/active (deactivate)", False, 
+                f"Status {resp.status_code}: {resp.text}")
+        # Clean up and return
+        superadmin_session.delete(f"/users/{temp_user_id}")
+        return False
+    
+    # Test 2: Try to login as deactivated user (should return 403 with "dinonaktifkan" message)
+    temp_session = TestSession()
+    resp = temp_session.session.post(
+        f"{BASE_URL}/auth/login",
+        json={"email": temp_user_email, "password": temp_user_password},
+        timeout=30
+    )
+    
+    if resp.status_code == 403:
+        response_text = resp.text.lower()
+        if "dinonaktifkan" in response_text or "nonaktif" in response_text:
+            log_test("Deactivated user login blocked with 403", True, 
+                    f"Correct error message: {resp.json().get('detail', '')}")
+        else:
+            log_test("Deactivated user login blocked with 403", False, 
+                    f"Got 403 but wrong message: {resp.text}")
+    else:
+        log_test("Deactivated user login blocked with 403", False, 
+                f"Expected 403, got {resp.status_code}: {resp.text}")
+    
+    # Test 3: Reactivate the user
+    resp = superadmin_session.patch(f"/users/{temp_user_id}/active", json={"active": True})
+    if resp.status_code == 200:
+        log_test("PATCH /api/users/{id}/active (reactivate)", True, "User reactivated successfully")
+    else:
+        log_test("PATCH /api/users/{id}/active (reactivate)", False, 
+                f"Status {resp.status_code}: {resp.text}")
+    
+    # Test 4: Try to login as reactivated user (should succeed)
+    if temp_session.login(temp_user_email, temp_user_password):
+        log_test("Reactivated user can login", True, "Login successful after reactivation")
+    else:
+        log_test("Reactivated user can login", False, "Login failed after reactivation")
+    
+    # Test 5: Try to deactivate own account (should return 400)
+    own_id = superadmin_session.user_info.get("id")
+    resp = superadmin_session.patch(f"/users/{own_id}/active", json={"active": False})
+    if resp.status_code == 400:
+        log_test("Cannot deactivate own account", True, "Correctly blocked with 400")
+    else:
+        log_test("Cannot deactivate own account", False, 
+                f"Expected 400, got {resp.status_code}: {resp.text}")
+    
+    # Test 6: Admin tries to deactivate superadmin account (should return 403)
+    admin_session = TestSession()
+    if admin_session.login(CREDENTIALS["admin"]["email"], CREDENTIALS["admin"]["password"]):
+        # Get superadmin user ID
+        users = admin_session.get("/users").json()
+        superadmin_user = next((u for u in users if u.get("role") == "superadmin"), None)
+        
+        if superadmin_user:
+            superadmin_id = superadmin_user.get("id")
+            resp = admin_session.patch(f"/users/{superadmin_id}/active", json={"active": False})
+            
+            if resp.status_code == 403:
+                log_test("Admin cannot deactivate superadmin", True, "Correctly blocked with 403")
+            else:
+                log_test("Admin cannot deactivate superadmin", False, 
+                        f"Expected 403, got {resp.status_code}: {resp.text}")
+        else:
+            log_test("Find superadmin for deactivate test", False, "No superadmin found")
+    else:
+        log_test("Admin login for deactivate test", False, "Could not login as admin")
+    
+    # Clean up: Delete temp user
+    if temp_user_id:
+        resp = superadmin_session.delete(f"/users/{temp_user_id}")
+        if resp.status_code == 200:
+            log_test("Clean up deactivate test user", True, "Deleted temp user")
+        else:
+            log_test("Clean up deactivate test user", False, 
+                    f"Could not delete: {resp.status_code}")
+    
+    return True
+
+
+def test_reset_password_feature():
+    """Test 7: Reset password - POST /api/users/{id}/reset-password"""
+    print("\n=== TEST 7: Reset Password Feature ===")
+    
+    # Login as superadmin
+    superadmin_session = TestSession()
+    if not superadmin_session.login(CREDENTIALS["superadmin"]["email"], CREDENTIALS["superadmin"]["password"]):
+        log_test("Superadmin login for reset password test", False, "Could not login")
+        return False
+    
+    # Create a temporary user
+    temp_user_email = "reset-password-test@test.com"
+    original_password = "OriginalPass123"
+    resp = superadmin_session.post("/auth/register", json={
+        "email": temp_user_email,
+        "password": original_password,
+        "name": "Reset Password Test User",
+        "role": "user"
+    })
+    
+    temp_user_id = None
+    if resp.status_code in [200, 201]:
+        temp_user = resp.json()
+        temp_user_id = temp_user.get("id")
+        log_test("Create temp user for reset password test", True, f"Created user ID: {temp_user_id}")
+    else:
+        log_test("Create temp user for reset password test", False, f"Status {resp.status_code}: {resp.text}")
+        return False
+    
+    # Test 1: Reset password to a valid new password (6+ characters)
+    new_password = "NewPass123"
+    resp = superadmin_session.post(f"/users/{temp_user_id}/reset-password", json={"password": new_password})
+    if resp.status_code == 200:
+        log_test("POST /api/users/{id}/reset-password (valid password)", True, 
+                "Password reset successfully")
+    else:
+        log_test("POST /api/users/{id}/reset-password (valid password)", False, 
+                f"Status {resp.status_code}: {resp.text}")
+        # Clean up and return
+        superadmin_session.delete(f"/users/{temp_user_id}")
+        return False
+    
+    # Test 2: Login with NEW password (should succeed)
+    temp_session = TestSession()
+    if temp_session.login(temp_user_email, new_password):
+        log_test("Login with new password after reset", True, "Login successful with new password")
+    else:
+        log_test("Login with new password after reset", False, "Login failed with new password")
+    
+    # Test 3: Try to reset password with less than 6 characters (should return 400)
+    short_password = "12345"  # Only 5 characters
+    resp = superadmin_session.post(f"/users/{temp_user_id}/reset-password", json={"password": short_password})
+    if resp.status_code == 400:
+        log_test("Reset password with <6 chars returns 400", True, "Correctly blocked with 400")
+    else:
+        log_test("Reset password with <6 chars returns 400", False, 
+                f"Expected 400, got {resp.status_code}: {resp.text}")
+    
+    # Test 4: Admin tries to reset superadmin password (should return 403)
+    admin_session = TestSession()
+    if admin_session.login(CREDENTIALS["admin"]["email"], CREDENTIALS["admin"]["password"]):
+        # Get superadmin user ID
+        users = admin_session.get("/users").json()
+        superadmin_user = next((u for u in users if u.get("role") == "superadmin"), None)
+        
+        if superadmin_user:
+            superadmin_id = superadmin_user.get("id")
+            resp = admin_session.post(f"/users/{superadmin_id}/reset-password", 
+                                     json={"password": "NewSuperPass123"})
+            
+            if resp.status_code == 403:
+                log_test("Admin cannot reset superadmin password", True, "Correctly blocked with 403")
+            else:
+                log_test("Admin cannot reset superadmin password", False, 
+                        f"Expected 403, got {resp.status_code}: {resp.text}")
+        else:
+            log_test("Find superadmin for reset password test", False, "No superadmin found")
+    else:
+        log_test("Admin login for reset password test", False, "Could not login as admin")
+    
+    # Clean up: Delete temp user
+    if temp_user_id:
+        resp = superadmin_session.delete(f"/users/{temp_user_id}")
+        if resp.status_code == 200:
+            log_test("Clean up reset password test user", True, "Deleted temp user")
+        else:
+            log_test("Clean up reset password test user", False, 
+                    f"Could not delete: {resp.status_code}")
+    
+    return True
+
+
 def print_summary():
     """Print test summary"""
     print("\n" + "="*70)
@@ -419,17 +782,16 @@ def print_summary():
 def main():
     """Run all tests"""
     print("="*70)
-    print("BACKEND API TESTS: Super Admin Role & RBAC")
+    print("BACKEND API TESTS: Account Management Features")
     print("="*70)
     print(f"Backend URL: {BASE_URL}")
     print("="*70)
     
     try:
-        # Run all test suites
-        test_all_accounts_login()
-        test_superadmin_access()
-        test_admin_restrictions()
-        test_superadmin_management_powers()
+        # Run NEW account management feature tests
+        test_audit_log_feature()
+        test_deactivate_activate_feature()
+        test_reset_password_feature()
         
         # Print summary
         all_passed = print_summary()

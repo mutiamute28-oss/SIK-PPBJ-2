@@ -147,6 +147,39 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ VERIFIED: All 5 seeded accounts login successfully with correct roles - superadmin (mutiamute28@gmail.com), admin (admin@sbb.co.id), keuangan (keuangan@sbb.co.id), approver (approver@sbb.co.id), user/pemohon (pemohon@sbb.co.id). All credentials from test_credentials.md working correctly."
+  - task: "Audit Log akun (GET /api/audit-logs)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED (14 test scenarios passed): Audit log feature working correctly. Created temp user, performed deactivate/activate/reset-password actions, verified audit logs contain all expected entries (user.create, user.deactivate, user.activate, user.reset_password) with correct structure (action, actor_email, target_email, details, created_at). Logs sorted newest first. Access control verified: superadmin GET /api/audit-logs → 200, admin → 200, keuangan → 403 (correctly blocked). All temp users cleaned up."
+  - task: "Nonaktifkan akun (PATCH /api/users/{id}/active) + blokir login"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED (7 test scenarios passed): Deactivate/activate feature working correctly. PATCH /api/users/{id}/active with {active:false} successfully deactivates user. Deactivated user login returns 403 with correct message 'Akun dinonaktifkan. Hubungi administrator.' Reactivate with {active:true} works, user can login again. Guards working: cannot deactivate own account (400), admin cannot deactivate superadmin (403). All temp users cleaned up."
+  - task: "Reset sandi oleh admin (POST /api/users/{id}/reset-password)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED (7 test scenarios passed): Reset password feature working correctly. POST /api/users/{id}/reset-password with valid password (6+ chars) successfully resets password. User can login with new password. Validation working: password <6 chars returns 400. Access control working: admin cannot reset superadmin password (403). All temp users cleaned up."
 
 frontend:
   - task: "Halaman Pengguna & Peran mendukung Super Admin"
@@ -167,12 +200,11 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 3
+  test_sequence: 4
   run_ui: true
 
 test_plan:
-  current_focus:
-    - "Halaman Pengguna & Peran mendukung Super Admin"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -186,3 +218,8 @@ agent_communication:
       message: "Frontend UI testing untuk fitur Super Admin sekarang diizinkan. Uji halaman /pengguna dengan kredensial super admin (mutiamute28@gmail.com/Banjarmasin1) dan admin (admin@sbb.co.id/admin123). Verifikasi: (1) Super admin login → sidebar label 'Super Admin' → menu 'Pengguna' terlihat. (2) Halaman /pengguna: judul, filter peran dengan counts (5 users total), baris super admin punya badge + '(Anda)' + tombol hapus disabled. (3) Filter peran (klik chip) → tabel filter → reset. (4) Tambah user (super admin): modal punya opsi 'Super Admin' di dropdown → buat test user → verifikasi muncul (count jadi 6). (5) Edit user: ubah role → badge update. (6) Hapus user: confirm → hilang (count kembali 5). (7) Login admin → /pengguna → modal TIDAK punya opsi 'Super Admin' → baris super admin punya tombol edit/hapus disabled."
     - agent: "testing"
       message: "✅ ALL FRONTEND UI TESTS PASSED (6/6 scenarios). Comprehensive Playwright testing completed for Pengguna & Peran page with Super Admin feature. Test Results: (1) Super Admin Login & Sidebar: ✓ Login successful (mutiamute28@gmail.com), ✓ Redirected to dashboard, ✓ Sidebar shows 'Super Admin' role label, ✓ 'Pengguna' menu visible and accessible. (2) Pengguna & Peran Page: ✓ Page title 'Pengguna & Peran' displayed, ✓ Role filter chips with counts (Semua 5, Super Admin 1, Admin 1, Keuangan 1, Approver 1, User 1), ✓ Super admin row has amber 'Super Admin' badge, ✓ '(Anda)' marker present, ✓ Delete button disabled for own account. (3) Role Filter: ✓ Clicking 'Keuangan' filters to 1 row, ✓ Clicking 'Semua' resets to 5 users. (4) Create User (super admin): ✓ Modal includes 'Super Admin' in role dropdown, ✓ Created QA Test User (qa_test_user@sbb.co.id, role User), ✓ User appears in table, ✓ Count increased to 6. (5) Edit User: ✓ Changed QA Test User role to 'Keuangan', ✓ Badge updated correctly. (6) Delete User: ✓ Deleted QA Test User, ✓ Removed from table, ✓ Count back to 5 (cleanup successful). (7) Admin Restrictions: ✓ Logged in as admin@sbb.co.id, ✓ Role dropdown does NOT include 'Super Admin' option (correct), ✓ Edit button disabled for super admin row, ✓ Delete button disabled for super admin row. All CRUD operations, role filtering, RBAC restrictions, and UI elements working perfectly. No issues found. Feature is production-ready."
+
+    - agent: "main"
+      message: "FITUR BARU manajemen akun — uji backend saja. Kredensial di /app/memory/test_credentials.md (superadmin mutiamute28@gmail.com/Banjarmasin1, admin admin@sbb.co.id/admin123). Uji: (1) AUDIT LOG: lakukan create user, PATCH deactivate, PATCH activate, POST reset-password, DELETE; lalu GET /api/audit-logs (sbagai superadmin & admin → 200; peran lain seperti keuangan → 403). Pastikan tiap aksi menghasilkan entri dengan field action/actor_email/target_email/details dan terurut terbaru dulu. (2) NONAKTIFKAN: PATCH /api/users/{id}/active {active:false} → login user tsb harus 403 'Akun dinonaktifkan'; {active:true} → login sukses; nonaktifkan akun sendiri → 400; admin biasa menonaktifkan superadmin → 403. (3) RESET SANDI: POST /api/users/{id}/reset-password {password} → login password baru sukses; password kurang dari 6 karакter → 400; admin biasa reset sandi superadmin → 403. WAJIB hapus semua user temp yang dibuat; JANGAN hapus 5 akun seed (mutiamute28@gmail.com, admin@sbb.co.id, keuangan@sbb.co.id, approver@sbb.co.id, pemohon@sbb.co.id)."
+    - agent: "testing"
+      message: "✅ ALL 3 NEW BACKEND FEATURES PASSED (28/28 tests). Comprehensive testing completed for account management features. FEATURE 1 - AUDIT LOG (14 tests): ✓ Created temp user and performed deactivate/activate/reset-password actions. ✓ GET /api/audit-logs returns all expected entries (user.create, user.deactivate, user.activate, user.reset_password). ✓ Audit log structure verified with all required fields (action, actor_email, target_email, details, created_at). ✓ Actor email correct (mutiamute28@gmail.com), target email correct (temp user). ✓ Logs sorted newest first (timestamps descending). ✓ Access control: superadmin → 200, admin → 200, keuangan → 403 (correctly blocked). FEATURE 2 - DEACTIVATE/ACTIVATE (7 tests): ✓ PATCH /api/users/{id}/active with {active:false} deactivates user successfully. ✓ Deactivated user login returns 403 with correct message 'Akun dinonaktifkan. Hubungi administrator.' ✓ PATCH with {active:true} reactivates user, login succeeds. ✓ Guards working: cannot deactivate own account (400), admin cannot deactivate superadmin (403). FEATURE 3 - RESET PASSWORD (7 tests): ✓ POST /api/users/{id}/reset-password with valid password (6+ chars) resets successfully. ✓ User can login with new password. ✓ Validation: password <6 chars returns 400. ✓ Access control: admin cannot reset superadmin password (403). ✓ All temporary users cleaned up (3 temp users created and deleted). ✓ 5 seeded accounts NOT deleted (verified). No issues found. All features working correctly and production-ready."

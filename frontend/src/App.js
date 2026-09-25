@@ -13,6 +13,7 @@ import AnggaranBulanan from "@/pages/AnggaranBulanan";
 import TaxSettings from "@/pages/TaxSettings";
 import AccountsPage from "@/pages/AccountsPage";
 import UsersPage from "@/pages/UsersPage";
+import ActivityLog from "@/pages/ActivityLog";
 
 function Protected({ children }) {
   const { user } = useAuth();
@@ -44,6 +45,7 @@ function App() {
             <Route path="/pajak" element={<Protected><TaxSettings /></Protected>} />
             <Route path="/akun" element={<Protected><AccountsPage /></Protected>} />
             <Route path="/pengguna" element={<Protected><UsersPage /></Protected>} />
+            <Route path="/log-aktivitas" element={<Protected><ActivityLog /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AuthProvider>

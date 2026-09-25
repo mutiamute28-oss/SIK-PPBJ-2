@@ -117,7 +117,31 @@ def require_roles(*roles):
 
 def public_user(u: dict) -> dict:
     return {"id": str(u["_id"]) if "_id" in u else u.get("id"), "email": u["email"],
-            "name": u.get("name", ""), "role": u.get("role", "user")}
+            "name": u.get("name", ""), "role": u.get("role", "user"), "active": u.get("active", True)}
+
+
+async def log_activity(actor: dict, action: str, target: dict = None, details: str = None):
+    """Catat jejak audit aksi akun/user."""
+    entry = {
+        "id": str(uuid.uuid4()),
+        "action": action,
+        "actor_id": str(actor.get("_id") or actor.get("id") or ""),
+        "actor_email": actor.get("email", ""),
+        "actor_name": actor.get("name", ""),
+        "actor_role": actor.get("role", ""),
+        "created_at": now_iso(),
+    }
+    if target is not None:
+        entry["target_id"] = str(target.get("_id") or target.get("id") or "")
+        entry["target_email"] = target.get("email", "")
+        entry["target_name"] = target.get("name", "")
+        entry["target_role"] = target.get("role", "")
+    if details:
+        entry["details"] = details
+    try:
+        await db.audit_logs.insert_one(entry)
+    except Exception as e:
+        logger.error(f"Gagal mencatat audit log: {e}")
 
 
 # ------------------------------------------------------------------ Brute force
@@ -197,6 +221,14 @@ class UserUpdateIn(BaseModel):
     name: Optional[str] = None
     role: Optional[str] = None
     password: Optional[str] = None
+
+
+class StatusIn(BaseModel):
+    active: bool
+
+
+class ResetPwIn(BaseModel):
+    password: str
 
 
 class Account(BaseModel):
@@ -300,9 +332,10 @@ async def register(body: RegisterIn, response: Response, user: dict = Depends(re
     if role == "superadmin" and user.get("role") != "superadmin":
         raise HTTPException(status_code=403, detail="Hanya super admin yang dapat membuat akun super admin")
     doc = {"email": email, "password_hash": hash_password(body.password), "name": body.name,
-           "role": role, "token_version": 0, "created_at": now_iso()}
+           "role": role, "token_version": 0, "active": True, "created_at": now_iso()}
     res = await db.users.insert_one(doc)
     doc["_id"] = res.inserted_id
+    await log_activity(user, "user.create", doc, f"Membuat pengguna baru (peran: {role})")
     return public_user(doc)
 
 
@@ -316,6 +349,8 @@ async def login(body: LoginIn, request: Request, response: Response):
     if not user or not verify_password(body.password, user["password_hash"]):
         await record_fail(ip, email)
         raise HTTPException(status_code=401, detail="Email atau kata sandi salah")
+    if not user.get("active", True):
+        raise HTTPException(status_code=403, detail="Akun dinonaktifkan. Hubungi administrator.")
     await clear_attempts(ip, email)
     ver = user.get("token_version", 0)
     uid = str(user["_id"])
@@ -412,14 +447,55 @@ async def update_user(uid: str, body: UserUpdateIn, user: dict = Depends(require
     if body.role == "superadmin" and not is_super:
         raise HTTPException(status_code=403, detail="Hanya super admin yang dapat menetapkan peran super admin")
     upd = {}
-    if body.name is not None:
+    changes = []
+    if body.name is not None and body.name != target.get("name"):
         upd["name"] = body.name
-    if body.role in ROLES:
+        changes.append("nama")
+    if body.role in ROLES and body.role != target.get("role"):
         upd["role"] = body.role
+        changes.append(f"peran → {body.role}")
     if body.password:
         upd["password_hash"] = hash_password(body.password)
+        changes.append("kata sandi")
     if upd:
         await db.users.update_one({"_id": ObjectId(uid)}, {"$set": upd, "$inc": {"token_version": 1} if body.password else {}})
+        await log_activity(user, "user.update", target, "Mengubah " + ", ".join(changes) if changes else "Memperbarui pengguna")
+    u = await db.users.find_one({"_id": ObjectId(uid)})
+    return public_user(u)
+
+
+@api_router.post("/users/{uid}/reset-password")
+async def reset_user_password(uid: str, body: ResetPwIn, user: dict = Depends(require_roles("admin"))):
+    target = await db.users.find_one({"_id": ObjectId(uid)})
+    if not target:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan")
+    is_super = user.get("role") == "superadmin"
+    if target.get("role") == "superadmin" and not is_super:
+        raise HTTPException(status_code=403, detail="Hanya super admin yang dapat mereset sandi akun super admin")
+    if not body.password or len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="Kata sandi minimal 6 karakter")
+    await db.users.update_one({"_id": ObjectId(uid)},
+                              {"$set": {"password_hash": hash_password(body.password)}, "$inc": {"token_version": 1}})
+    await db.login_attempts.delete_many({"email": target["email"]})
+    await log_activity(user, "user.reset_password", target, "Mereset kata sandi pengguna")
+    return {"message": "Kata sandi pengguna berhasil direset"}
+
+
+@api_router.patch("/users/{uid}/active")
+async def set_user_active(uid: str, body: StatusIn, user: dict = Depends(require_roles("admin"))):
+    actor_id = str(user["_id"] if "_id" in user else user.get("id"))
+    if actor_id == uid:
+        raise HTTPException(status_code=400, detail="Tidak dapat menonaktifkan akun sendiri")
+    target = await db.users.find_one({"_id": ObjectId(uid)})
+    if not target:
+        raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan")
+    is_super = user.get("role") == "superadmin"
+    if target.get("role") == "superadmin" and not is_super:
+        raise HTTPException(status_code=403, detail="Hanya super admin yang dapat mengubah status akun super admin")
+    await db.users.update_one({"_id": ObjectId(uid)},
+                              {"$set": {"active": body.active}, "$inc": {"token_version": 1}})
+    action = "user.activate" if body.active else "user.deactivate"
+    await log_activity(user, action, target, "Mengaktifkan akun" if body.active else "Menonaktifkan akun")
     u = await db.users.find_one({"_id": ObjectId(uid)})
     return public_user(u)
 
@@ -440,7 +516,15 @@ async def delete_user(uid: str, user: dict = Depends(require_roles("admin"))):
         if remaining <= 1:
             raise HTTPException(status_code=400, detail="Tidak dapat menghapus super admin terakhir")
     await db.users.delete_one({"_id": ObjectId(uid)})
+    await log_activity(user, "user.delete", target, f"Menghapus pengguna (peran: {target.get('role')})")
     return {"message": "User dihapus"}
+
+
+@api_router.get("/audit-logs")
+async def list_audit_logs(user: dict = Depends(require_roles("admin")), limit: int = 200):
+    limit = max(1, min(limit, 500))
+    logs = await db.audit_logs.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return logs
 
 
 # ------------------------------------------------------------------ MASTER: Accounts (COA)
@@ -1008,7 +1092,9 @@ async def seed():
         if not await db.users.find_one({"email": du["email"]}):
             await db.users.insert_one({"email": du["email"], "password_hash": hash_password(du["password"]),
                                        "name": du["name"], "role": du["role"], "token_version": 0,
-                                       "created_at": now_iso()})
+                                       "active": True, "created_at": now_iso()})
+    # migrasi: pastikan semua user punya field 'active'
+    await db.users.update_many({"active": {"$exists": False}}, {"$set": {"active": True}})
     # COA
     if await db.accounts.count_documents({}) == 0:
         for a in DEFAULT_COA:
